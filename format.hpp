@@ -12,6 +12,8 @@ James Preiss, 2013.  Public domain.
 
 #include <string>
 #include <sstream>
+#include <vector>
+#include <algorithm>
 
 namespace
 {
@@ -42,6 +44,87 @@ namespace
 		return before + replace + recurse_after;
 	}
 
+	std::vector<std::string::const_iterator> find_all_substrings(std::string const &str, std::string const &find)
+	{
+		std::vector<std::string::const_iterator> iters;
+
+		size_t find_length = find.length();
+
+		if (find_length == 0)
+		{
+			return iters;
+		}
+
+		// probably more than enough for a typical formatting operation
+		iters.reserve(4);
+
+		std::string::const_iterator begin = str.begin();
+
+		size_t index = str.find(find);
+
+		while (index != std::string::npos)
+		{
+			iters.push_back(begin + index);
+			size_t next_start = index + find_length;
+
+			if (next_start >= str.length())
+			{
+				break;
+			}
+
+			index = str.find(find, next_start);
+		}
+
+		return iters;
+	}
+
+	std::string find_and_replace_iter(std::string const &str, std::string const &find, std::string const &replace)
+	{
+		auto substring_iters = find_all_substrings(str, find);
+		size_t num_substrings = substring_iters.size();
+
+		if (num_substrings == 0)
+		{
+			return str;
+		}
+
+		size_t str_size = str.size();
+		size_t find_size = find.size();
+		size_t replace_size = replace.size();
+
+		ptrdiff_t delta_size = (replace_size - find_size) * num_substrings;
+		size_t output_size = str_size + delta_size;
+
+		// would prefer not to do initialization here,
+		// but replace() doesn't play nice
+		std::string output(output_size, '\0');
+
+		auto src = str.begin();
+		auto dst = output.begin();
+		
+		std::for_each(substring_iters.begin(), substring_iters.end(), [&](std::string::const_iterator iter)
+		{
+			// upto
+			ptrdiff_t length_upto = iter - src;
+			output.replace(dst, dst + length_upto,
+			               src, iter);
+
+			dst += length_upto;
+
+			// replace
+			output.replace(dst, dst + replace_size, replace);
+
+			src = iter + find_size;
+			dst += replace_size;
+		});
+
+		// to end
+		output.replace(dst, output.end(),
+		               src, str.end());
+
+		return output;
+	}
+
 	//
 	// workhorse
 	//
@@ -56,7 +139,7 @@ namespace
 		search_stream << '{' << argnum << '}';
 		std::string search_string = search_stream.str();
 
-		return find_and_replace(fmt, search_string, arg_string);
+		return find_and_replace_iter(fmt, search_string, arg_string);
 	}
 }
 
