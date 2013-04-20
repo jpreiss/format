@@ -17,33 +17,6 @@ James Preiss, 2013.  Public domain.
 
 namespace
 {
-	//
-	// recursive implementation, slow but correct
-	// will replace with an iterative version ASAP
-	//
-	std::string find_and_replace(std::string const &str, std::string const &find, std::string const &replace)
-	{
-		size_t find_length = find.length();
-
-		if (find_length == 0)
-		{
-			return str;
-		}
-
-		size_t index = str.find(find);
-
-		if (index == std::string::npos)
-		{
-			return str;
-		}
-
-		std::string before = str.substr(0, index);
-		std::string after = str.substr(index + find_length, std::string::npos);
-		std::string recurse_after = find_and_replace(after, find, replace);
-
-		return before + replace + recurse_after;
-	}
-
 	std::vector<std::string::const_iterator> find_all_substrings(std::string const &str, std::string const &find)
 	{
 		std::vector<std::string::const_iterator> iters;
@@ -78,7 +51,7 @@ namespace
 		return iters;
 	}
 
-	std::string find_and_replace_iter(std::string const &str, std::string const &find, std::string const &replace)
+	std::string find_and_replace(std::string const &str, std::string const &find, std::string const &replace)
 	{
 		auto substring_iters = find_all_substrings(str, find);
 		size_t num_substrings = substring_iters.size();
@@ -139,7 +112,7 @@ namespace
 		search_stream << '{' << argnum << '}';
 		std::string search_string = search_stream.str();
 
-		return find_and_replace_iter(fmt, search_string, arg_string);
+		return find_and_replace(fmt, search_string, arg_string);
 	}
 }
 
