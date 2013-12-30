@@ -2,9 +2,27 @@
 
 #include <cassert>
 
+template <typename T>
+void check_throws(char *fmt, T const &arg)
+{
+	bool throwed = false;
+	try
+	{
+		std::string s = format(fmt, arg);
+	}
+	catch (FormatStringException &ex)
+	{
+		throwed = true;
+	}
+	assert(throwed);
+}
+
 int main()
 {
 	std::string s;
+
+	s = format("", 12, "null");
+	assert(s == "");
 
 	s = format("o hai", 42);
 	assert(s == "o hai");
@@ -23,4 +41,22 @@ int main()
 
 	s = format("{0} {1} {2} {1} {2} {3}", 0, 1, 2, 3);
 	assert(s == "0 1 2 1 2 3");
+
+	check_throws("{", 0);
+
+	check_throws("{{{", 0);
+	
+	check_throws("{}}", 0);
+
+	check_throws("}}}}}", 0);
+
+	check_throws("{hello}", 0);
+
+	check_throws("{0hi}", 0);
+
+	check_throws("{1}", 0);
+
+	check_throws("{12hello}", 0);
+
+	check_throws("{0{1}}", 0);
 }

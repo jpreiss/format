@@ -12,147 +12,283 @@ James Preiss, 2013.  Public domain.
 
 #include <string>
 #include <sstream>
-#include <vector>
-#include <algorithm>
+#include <exception>
+
+class FormatStringException : public std::runtime_error
+{
+public:
+	FormatStringException(char const *msg) : std::runtime_error(msg) {}
+};
 
 namespace
 {
-	std::vector<std::string::const_iterator> find_all_substrings(std::string const &str, std::string const &find)
+	bool is_digit(char c)
 	{
-		std::vector<std::string::const_iterator> iters;
-
-		size_t find_length = find.length();
-
-		if (find_length == 0)
-		{
-			return iters;
-		}
-
-		// probably more than enough for a typical formatting operation
-		iters.reserve(4);
-
-		std::string::const_iterator begin = str.begin();
-
-		size_t index = str.find(find);
-
-		while (index != std::string::npos)
-		{
-			iters.push_back(begin + index);
-			size_t next_start = index + find_length;
-
-			if (next_start >= str.length())
-			{
-				break;
-			}
-
-			index = str.find(find, next_start);
-		}
-
-		return iters;
+		return ('0' <= c) && (c <= '9');
 	}
 
-	std::string find_and_replace(std::string const &str, std::string const &find, std::string const &replace)
+	int to_digit(char c)
 	{
-		auto substring_iters = find_all_substrings(str, find);
-		size_t num_substrings = substring_iters.size();
+		return c - '0';
+	}
 
-		if (num_substrings == 0)
-		{
-			return str;
+	/*
+	concept TraverseHandler
+	{
+		void on_marker(int marker_number);
+		void on_escape_left();
+		void on_escape_right();
+		void on_chars(char *chars, int count);
+	}
+	*/
+
+	template <int N>
+	class Counter
+	{
+	public:
+		int count[N];
+		int brace_escapes;
+		int plain_chars;
+
+		Counter() : brace_escapes(0), plain_chars(0)
+		{ 
+			memset(count, 0, sizeof(int) * N);
 		}
 
-		size_t str_size = str.size();
-		size_t find_size = find.size();
-		size_t replace_size = replace.size();
+		void on_marker(int marker_number)
+		{ 
+			count[marker_number] += 1;
+		}
 
-		ptrdiff_t delta_size = (replace_size - find_size) * num_substrings;
-		size_t output_size = str_size + delta_size;
+		void on_escape_left() { ++brace_escapes; }
 
-		// would prefer not to do initialization here,
-		// but replace() doesn't play nice
-		std::string output(output_size, '\0');
+		void on_escape_right() { ++brace_escapes; }
 
-		auto src = str.begin();
-		auto dst = output.begin();
-		
-		std::for_each(substring_iters.begin(), substring_iters.end(), [&](std::string::const_iterator iter)
+		// inlined.  verified in ASM
+		void on_char(char c) { ++plain_chars; }
+	};
+
+	template <int N>
+	class Formatter
+	{
+	public:
+		// assumes dst is already the right size
+		Formatter(std::string &destination, std::string values[N]) : 
+			dest(destination),
+			i(0),
+			vals(values)
 		{
-			// upto
-			ptrdiff_t length_upto = iter - src;
-			output.replace(dst, dst + length_upto,
-			               src, iter);
+		}
 
-			dst += length_upto;
+		void on_marker(int marker_number)
+		{
+			size_t len = vals[marker_number].length();
+			dest.replace(i, len, vals[marker_number]);
+			i += len;
+		}
 
-			// replace
-			output.replace(dst, dst + replace_size, replace);
+		void on_escape_left()
+		{
+			dest[i] = '{';
+			++i;
+		}
 
-			src = iter + find_size;
-			dst += replace_size;
-		});
+		void on_escape_right()
+		{
+			dest[i] = '}';
+			++i;
+		}
 
-		// to end
-		output.replace(dst, output.end(),
-		               src, str.end());
+		// inlined.  verified in ASM
+		void on_char(char c)
+		{
+			dest[i] = c;
+			++i;
+		}
+
+	private:
+		std::string &dest;
+		size_t i;
+		std::string *vals;
+	};
+
+	template <int N, typename Handler>
+	int traverse(char const *fmt, Handler &callback)
+	{
+		char const *c = fmt;
+		while (*c != '\0')
+		{
+			if (*c == '{')
+			{
+				// lookahead for escaped braces
+				if (c[1] == '{')
+				{
+					callback.on_escape_left();
+					c += 2;
+				}
+				else
+				{
+					int number = 0;
+					++c;
+
+					if (*c == '\0')
+						throw FormatStringException("Unexpected end of string");
+
+					// must be at least one number
+					if (!is_digit(*c))
+						throw FormatStringException("Invalid brace contents: must be positive integer");
+
+					number = to_digit(*c);
+					++c;
+
+					while (is_digit(*c))
+					{
+						number *= 10;
+						number += to_digit(*c);
+						++c;
+					}
+
+					if (*c == '\0')
+						throw FormatStringException("Unexpected end of string");
+
+					if (*c != '}')
+						throw FormatStringException("Invalid brace contents: must be positive integer");
+
+					if (number >= N)
+						throw FormatStringException("Invalid format value number");
+
+					callback.on_marker(number);
+
+					++c;
+				}
+			}
+			else if (*c == '}')
+			{
+				if (c[1] == '}')
+				{
+					callback.on_escape_right();
+					c += 2;
+				}
+				else
+				{
+					throw FormatStringException("Un-escaped right brace");
+				}
+			}
+			else
+			{
+				callback.on_char(*c);
+				++c;
+			}
+		}
+	}
+
+	template <int N>
+	size_t formatted_total(std::string *values, int *counts)
+	{
+		size_t total = 0;
+		for (int i = 0; i < N; ++i)
+		{
+			total += values[i].length() * counts[i];
+		}
+		return total;
+	}
+
+	template <int N>
+	std::string format_array(char const *format, std::string values[N])
+	{
+		Counter<N> counter;
+		traverse<N>(format, counter);
+
+		size_t formats_size = formatted_total<N>(values, counter.count);
+		size_t output_total = formats_size + counter.brace_escapes + counter.plain_chars;
+
+		std::string output(output_total, '\0');
+		Formatter<N> formatter(output, values);
+		traverse<N>(format, formatter);
 
 		return output;
 	}
 
-	//
-	// workhorse
-	//
-	template <typename T, int argnum>
-	std::string format_onearg(std::string const &fmt, T const &value)
+	template <typename T>
+	void add(std::stringstream &ss, std::string values[], T const &value, int index)
 	{
-		std::ostringstream arg_stream;
-		arg_stream << value;
-		std::string arg_string = arg_stream.str();
-
-		std::ostringstream search_stream;
-		search_stream << '{' << argnum << '}';
-		std::string search_string = search_stream.str();
-
-		return find_and_replace(fmt, search_string, arg_string);
+		ss.str("");
+		ss << value;
+		values[index] = ss.str();
 	}
 }
+
 
 //
 // should be a variadic template, but VS2010.
 //
 template <typename T>
-std::string format(std::string const &fmt, T const &value)
+std::string format(char const *fmt, T const &value)
 {
-	return format_onearg<T, 0>(fmt, value);
+	std::string values[1];
+	std::stringstream ss;
+	add(ss, values, value, 0);
+	return format_array<1>(fmt, values);
 }
 
 template <typename T0, typename T1>
-std::string format(std::string const &fmt, T0 const &v0, T1 const &v1)
+std::string format(char const *fmt, T0 const &v0, T1 const &v1)
 {
-	return format_onearg<T1, 1>(format(fmt, v0), v1);
+	std::string values[2];
+	std::stringstream ss;
+	add(ss, values, v0, 0);
+	add(ss, values, v1, 1);
+	return format_array<2>(fmt, values);
 }
 
 template <typename T0, typename T1, typename T2>
-std::string format(std::string const &fmt, T0 const &v0, T1 const &v1, T2 const &v2)
+std::string format(char const *fmt, T0 const &v0, T1 const &v1, T2 const &v2)
 {
-	return format_onearg<T2, 2>(format(fmt, v0, v1), v2);
+	std::string values[3];
+	std::stringstream ss;
+	add(ss, values, v0, 0);
+	add(ss, values, v1, 1);
+	add(ss, values, v2, 2);
+	return format_array<3>(fmt, values);
 }
 
 template <typename T0, typename T1, typename T2, typename T3>
-std::string format(std::string const &fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3)
+std::string format(char const *fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3)
 {
-	return format_onearg<T3, 3>(format(fmt, v0, v1, v2), v3);
+	std::string values[4];
+	std::stringstream ss;
+	add(ss, values, v0, 0);
+	add(ss, values, v1, 1);
+	add(ss, values, v2, 2);
+	add(ss, values, v3, 3);
+	return format_array<4>(fmt, values);
 }
 
 template <typename T0, typename T1, typename T2, typename T3, typename T4>
-std::string format(std::string const &fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3, T4 const &v4)
+std::string format(char const *fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3, T4 const &v4)
 {
-	return format_onearg<T4, 4>(format(fmt, v0, v1, v2, v3), v4);
+	std::string values[5];
+	std::stringstream ss;
+	add(ss, values, v0, 0);
+	add(ss, values, v1, 1);
+	add(ss, values, v2, 2);
+	add(ss, values, v3, 3);
+	add(ss, values, v4, 4);
+	return format_array<5>(fmt, values);
 }
 
 template <typename T0, typename T1, typename T2, typename T3, typename T4, typename T5>
-std::string format(std::string const &fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3, T4 const &v4, T5 const &v5)
+std::string format(char const *fmt, T0 const &v0, T1 const &v1, T2 const &v2, T3 const &v3, T4 const &v4, T5 const &v5)
 {
-	return format_onearg<T4, 4>(format(fmt, v0, v1, v2, v3, v4), v5);
+	std::string values[6];
+	std::stringstream ss;
+	add(ss, values, v0, 0);
+	add(ss, values, v1, 1);
+	add(ss, values, v2, 2);
+	add(ss, values, v3, 3);
+	add(ss, values, v4, 4);
+	add(ss, values, v5, 5);
+	return format_array<6>(fmt, values);
 }
 
 //
