@@ -3,7 +3,7 @@
 #include <cassert>
 
 template <typename T>
-void check_throws(char *fmt, T const &arg)
+void check_throws(char const *fmt, T const &arg)
 {
 	bool throwed = false;
 	try

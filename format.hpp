@@ -113,7 +113,7 @@ namespace
 	};
 
 	template <int N, typename Handler>
-	int traverse(char const *fmt, Handler &callback)
+	void traverse(char const *fmt, Handler &callback)
 	{
 		char const *c = fmt;
 		while (*c != '\0')
